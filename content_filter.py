@@ -147,21 +147,16 @@ class ContentFilter:
     def fuzzy_match(self, word: str, keyword: str, threshold: float = 0.85) -> bool:
         """
         模糊匹配 - 使用编辑距离判断相似度
-        
-        Args:
-            word: 待检查的词
-            keyword: 关键词
-            threshold: 相似度阈值 (默认0.85)
-            
-        Returns:
-            是否匹配
         """
         # 规范化后再比较
         normalized_word = self.normalize_text(word)
         normalized_keyword = self.normalize_text(keyword)
         
-        # 精确匹配
-        if normalized_keyword in normalized_word or normalized_word in normalized_keyword:
+        if not normalized_word or not normalized_keyword:
+            return False
+
+        # 检查单词是否包含敏感词 (如 word="pornography", keyword="porn")
+        if normalized_keyword in normalized_word:
             return True
         
         # 计算相似度
@@ -171,19 +166,21 @@ class ContentFilter:
     def check_synonyms(self, text: str) -> List[str]:
         """
         检查文本中是否包含同义词
-        
-        Args:
-            text: 待检查的文本
-            
-        Returns:
-            发现的同义词列表（已映射为标准词）
         """
         found = []
         normalized_text = self.normalize_text(text)
+        words = [self.normalize_text(w) for w in re.split(r'[,，\s]+', text) if w.strip()]
         
         for synonym, standard in self.synonym_map.items():
             normalized_synonym = self.normalize_text(synonym)
-            if normalized_synonym in normalized_text:
+            
+            # 方法1: 精确单词匹配
+            if any(normalized_synonym == w for w in words):
+                found.append(f"{synonym} → {standard}")
+                continue
+                
+            # 方法2: 全文本包含匹配 (仅针对较长的同义词短语，如 "not safe for work")
+            if len(normalized_synonym) > 5 and normalized_synonym in normalized_text:
                 found.append(f"{synonym} → {standard}")
         
         return found
@@ -191,19 +188,23 @@ class ContentFilter:
     def check_pinyin(self, text: str) -> List[str]:
         """
         检查文本中是否包含拼音形式的敏感词
-        
-        Args:
-            text: 待检查的文本
-            
-        Returns:
-            发现的拼音词列表
         """
         found = []
-        normalized_text = self.normalize_text(text)
+        words = [self.normalize_text(w) for w in re.split(r'[,，\s]+', text) if w.strip()]
         
         for pinyin, chinese in self.pinyin_map.items():
-            if pinyin in normalized_text:
-                found.append(f"{pinyin} → {chinese}")
+            normalized_pinyin = self.normalize_text(pinyin)
+            for w in words:
+                # 针对极短的拼音缩写（如 bl, st, bt），要求精确匹配或作为独立单词存在
+                if len(normalized_pinyin) <= 2:
+                    if normalized_pinyin == w:
+                        found.append(f"{pinyin} → {chinese}")
+                        break
+                else:
+                    # 较长的拼音可以允许包含匹配
+                    if normalized_pinyin in w:
+                        found.append(f"{pinyin} → {chinese}")
+                        break
         
         return found
     
