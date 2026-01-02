@@ -12,6 +12,7 @@ from io import BytesIO
 from PIL import Image as PILImage
 from .comfyui_api import ComfyUIAPI
 from .text_to_image import TextToImage
+from .content_filter import ContentFilter
 
 
 @register("astrbot_plugin_comfyui_hub", "ChooseC", "为 AstrBot 提供 ComfyUI 调用能力的插件，计划支持 ComfyUI 全功能。",
@@ -66,6 +67,9 @@ class ComfyUIHub(Star):
             config.get("upscale_node", ""),
             config.get("upscale_scale_field", "resize_scale")
         )
+        
+        # 初始化高级内容过滤器
+        self.content_filter = None  # 延迟初始化，在审查模式开启时创建
 
     def _load_block_data(self):
         self.block_tags = set()
@@ -314,24 +318,61 @@ class ComfyUIHub(Star):
 
         # 检查正向和反向提示词是否包含违规词（仅在审查开启时）
         if is_censorship_enabled:
-            found_tags = []
-            for tag in self.block_tags:
-                if tag.lower() in positive.lower() or (negative and tag.lower() in negative.lower()):
-                    found_tags.append(tag)
+            # 初始化内容过滤器（如果还未初始化）
+            if self.content_filter is None:
+                # 传入用户自定义的 block_tags，ContentFilter 内部会自动合并默认库
+                self.content_filter = ContentFilter(self.block_tags)
             
-            if found_tags:
+            # 使用高级过滤器检查正面提示词
+            has_violation, details = self.content_filter.check_content(positive, enable_fuzzy=True)
+            
+            # 如果有负面提示词，也检查一下（虽然负面提示词包含敏感词通常是正常的）
+            # 这里主要是为了检测用户是否在负面提示词中使用了审查系统禁止的词汇
+            if has_violation:
+                violation_summary = self.content_filter.get_violation_summary(details)
                 self.blocked_users[user_id] = current_time + 120  # 2分钟封禁
                 self._save_block_data()
-                yield event.plain_result(f"⚠️ 您的绘图申请包含违规词: {', '.join(found_tags)}。您将被禁服务 2 分钟。")
+                logger.info(f"审查模式检测到违规内容: {violation_summary}")
+                yield event.plain_result(f"⚠️ 您的绘图申请包含违规内容，已被智能审查系统检测。您将被禁服务 2 分钟。")
                 return
 
         # 自动补全安全提示词（仅在审查开启时）
         if is_censorship_enabled:
-            if not any(word in positive.lower() for word in ["safe for work", "sfw", "cencored", "censored"]):
-                positive = positive.rstrip(", ") + ", sfw" if positive else "sfw"
+            # 定义安全提示词和审查负面词
+            safe_words = ["safe for work", "sfw", "censored"]
+            censorship_negative_words = [
+                "nsfw", "nude", "nudity", "naked", "explicit",
+                "血腥", "暴力", "猎奇", "gore", "violence", "bloody", "guro",
+                "sexual", "porn", "hentai", "ecchi", "r18", "adult"
+            ]
             
-            if "nsfw" not in (negative or "").lower():
-                negative = (negative.rstrip(", ") + ", nsfw") if negative else "nsfw"
+            # 检查正面提示词中是否包含安全词
+            has_safe_word = any(word in positive.lower() for word in safe_words)
+            if not has_safe_word:
+                positive = positive.rstrip(", ") + ", sfw, safe for work" if positive else "sfw, safe for work"
+            
+            # 构建负面提示词：添加所有审查相关的词
+            negative_lower = (negative or "").lower()
+            missing_negative_words = [word for word in censorship_negative_words if word not in negative_lower]
+            
+            if missing_negative_words:
+                negative_addition = ", ".join(missing_negative_words)
+                negative = (negative.rstrip(", ") + ", " + negative_addition) if negative else negative_addition
+            
+            # 从正面提示词中剔除与负面提示词冲突的tag
+            positive_tags = [tag.strip() for tag in re.split(r',', positive)]
+            cleaned_positive_tags = []
+            
+            for tag in positive_tags:
+                tag_lower = tag.lower()
+                # 检查是否与负面词冲突
+                is_conflict = any(neg_word in tag_lower for neg_word in censorship_negative_words)
+                if not is_conflict:
+                    cleaned_positive_tags.append(tag)
+                else:
+                    logger.info(f"审查模式：从正面提示词中移除冲突tag: {tag}")
+            
+            positive = ", ".join(cleaned_positive_tags)
 
         if not positive:
             yield event.plain_result("请输入正面提示词")
