@@ -70,6 +70,7 @@ class ComfyUIHub(Star):
         # 初始化审查设置
         self.use_astrbot_llm = config.get("use_astrbot_llm", True)
         self.censorship_prompt = config.get("censorship_prompt", "")
+        self.llm_provider_id = config.get("llm_provider_id", "")
 
     def _load_block_data(self):
         self.block_tags = set()
@@ -149,19 +150,23 @@ class ComfyUIHub(Star):
             if not self.use_astrbot_llm:
                 return True, "Disabled"
 
-            # 获取当前会话使用的模型 ID
-            umo = event.unified_msg_origin
-            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            # 优先使用配置的提供商 ID，否则使用当前会话的提供商
+            provider_id = self.llm_provider_id
             if not provider_id:
-                return True, "No Provider"
+                # 如果配置中没有指定，则使用会话默认提供商
+                umo = event.unified_msg_origin
+                provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+                if not provider_id:
+                    return True, "No Provider"
 
-            # 替换提示词模板
-            full_prompt = self.censorship_prompt.replace("{prompt}", text) if "{prompt}" in self.censorship_prompt else f"{self.censorship_prompt}\nPrompt: {text}"
-            
-            # 使用 AstrBot 内置 LLM 生成
+            # 系统提示词（审查指导原则）
+            system_prompt = self.censorship_prompt
+
+            # 使用 AstrBot 内置 LLM 生成，传入系统提示词和用户输入
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
-                prompt=full_prompt
+                prompt=text,
+                system_prompt=system_prompt
             )
 
             if not llm_resp or not llm_resp.completion_text:
