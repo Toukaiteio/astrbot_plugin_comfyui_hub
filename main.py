@@ -66,11 +66,12 @@ class ComfyUIHub(Star):
             config.get("upscale_node", ""),
             config.get("upscale_scale_field", "resize_scale")
         )
-        
+
         # 初始化审查设置
         self.use_astrbot_llm = config.get("use_astrbot_llm", True)
         self.censorship_prompt = config.get("censorship_prompt", "")
         self.llm_provider_id = config.get("llm_provider_id", "")
+        self.admin_bypass_censorship = config.get("admin_bypass_censorship", True)
 
     def _load_block_data(self):
         self.block_tags = set()
@@ -357,7 +358,11 @@ class ComfyUIHub(Star):
         group_id = event.get_group_id()
         is_censorship_enabled = group_id and group_id in self.censored_groups
 
-        if is_censorship_enabled:
+        # 检查是否为管理员且开启了管理员绕过选项
+        is_admin = event.is_admin()
+        should_bypass_censorship = is_admin and self.admin_bypass_censorship
+
+        if is_censorship_enabled and not should_bypass_censorship:
             # 1. 本地 Block Tag 检查
             for tag in self.block_tags:
                 if tag.lower() in positive.lower(): # 简单的子串匹配

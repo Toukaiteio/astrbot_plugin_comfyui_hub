@@ -89,5 +89,11 @@
     "hint": "选择用于审查的 LLM 提供商，留空则使用会话默认提供商",
     "_special": "select_provider",
     "default": ""
+  },
+  "admin_bypass_censorship": {
+    "description": "管理员绕过审查",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后管理员发送的绘图请求将跳过审查系统"
   }
 }
